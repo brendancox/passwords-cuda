@@ -490,7 +490,7 @@ void pbkdf2(std::string password, std::string salt, uint8_t digest[SHA256HashSiz
     unsigned char * pw = (unsigned char *)password.c_str();
     int pwsize = password.size();
 
-    uint8_t dk[SHA256HashSize];
+    //uint8_t dk[SHA256HashSize];
 
     unsigned char * newsalt = (unsigned char *)malloc(16);
     HexToBytes(salt, newsalt);
@@ -507,13 +507,16 @@ void pbkdf2(std::string password, std::string salt, uint8_t digest[SHA256HashSiz
         digest
     );
 
-    for (int a = 0; a < 32; a++) {
+    /*for (int a = 0; a < 32; a++) {
         dk[a] = digest[a];
-    }
+    }*/
 
     uint8_t newdigest[32];
     uint8_t runningkey[32];
-    memcpy(runningkey, dk, 32);
+
+    memcpy(runningkey, digest, 32);
+    //memcpy(runningkey, dk, 32);
+    
     for (int i = 2; i <= rounds; i++) {
         hmac(
             runningkey,
@@ -524,14 +527,15 @@ void pbkdf2(std::string password, std::string salt, uint8_t digest[SHA256HashSiz
         );
 
         for (int j = 0; j < 32; j++) {
-            dk[j] = dk[j] ^ newdigest[j];
+            //dk[j] = dk[j] ^ newdigest[j];
+            digest[j] = digest[j] ^ newdigest[j];
             runningkey[j] = newdigest[j];
         }
     }
 
-    for (int b = 0; b < 32; b++) {
+    /*for (int b = 0; b < 32; b++) {
         digest[b] = dk[b];
-    }
+    }*/
 }
 
 
@@ -557,10 +561,8 @@ void loadWords() {
     // ID: DOHB6DC7
     std::string salt = "9dc661ec09c948dd16710439d157cef2";
     std::string expected = "4073c5e1cbd7790347b26e0447795220cd933689219b3446da294f509a583d48";
-    unsigned char * expectedBytes = (unsigned char *)malloc(16);
+    unsigned char * expectedBytes = (unsigned char *)malloc(32);
     HexToBytes(expected, expectedBytes);
-
-    std::cout << "Salt ready" <<std::endl;
 
     int attempts = 5;
 
@@ -598,10 +600,10 @@ void loadWords() {
 
     auto done = std::chrono::high_resolution_clock::now();
 
-    double totalTime = std::chrono::duration_cast<std::chrono::microseconds>(done-started).count();
+    double totalTime = std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count();
     totalTime = totalTime / 1000;
 
-    std::cout << "Total time taken: " << std::fixed << totalTime << "ms" << std::endl;
+    std::cout << "Total time taken: " << std::fixed << totalTime << "s" << std::endl;
 }
 
 
@@ -642,6 +644,20 @@ int main(void)
         std::cout << std::setw(2) << std::setfill('0') << std::hex << static_cast<int>(pdprk[i]);
     }
     std::cout << std::endl;
+
+    unsigned char * expectedBytes = (unsigned char *)malloc(32);
+    HexToBytes(testhash, expectedBytes);
+    bool match = true;
+    for (int j = 0; j < SHA256HashSize; j++) {
+      if (pdprk[j] != expectedBytes[j]) {
+        match = false;
+        break;
+      }
+    }
+
+    if (match) {
+      std::cout << "pbkdf2 Test hash matched" << std::endl;
+    }
 
     std::cout << "pbkdf2 Done" << std::endl;
 
