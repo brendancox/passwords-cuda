@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string>
 #include <vector>
+#include <fstream>
+#include <chrono>
 
 #include "sgl.h"
 
@@ -533,6 +535,75 @@ void pbkdf2(std::string password, std::string salt, uint8_t digest[SHA256HashSiz
 }
 
 
+void loadWords() {
+    std::string words[18328];
+
+    std::string line;
+    std::ifstream myfile;
+    myfile.open ("AgileWords.txt");
+    if (myfile.is_open())
+    {
+        int i = 0;
+      while ( getline (myfile,line) )
+      {
+        words[i] = line;
+        i++;
+      }
+      myfile.close();
+    }
+
+    std::cout << "Words loaded" <<std::endl;
+
+    // ID: DOHB6DC7
+    std::string salt = "9dc661ec09c948dd16710439d157cef2";
+    std::string expected = "4073c5e1cbd7790347b26e0447795220cd933689219b3446da294f509a583d48";
+    unsigned char * expectedBytes = (unsigned char *)malloc(16);
+    HexToBytes(expected, expectedBytes);
+
+    std::cout << "Salt ready" <<std::endl;
+
+    int attempts = 5;
+
+    auto started = std::chrono::high_resolution_clock::now();
+
+    std::cout << "About to start loop" <<std::endl;
+
+    for (int i = 0; i < attempts; i++) {
+
+      // Should seed before loop
+      int rand1 = rand() % 18327;
+      int rand2 = rand() % 18327;
+      int rand3 = rand() % 18327;
+      std::string password = words[rand1] + " " + words[rand2] + " " + words[rand3];
+      uint8_t result[SHA256HashSize];
+
+      pbkdf2(password, salt, result);
+      
+      bool match = true;
+      for (int j = 0; j < SHA256HashSize; j++) {
+        if (result[j] != expectedBytes[j]) {
+          match = false;
+          break;
+        }
+      }
+
+      if (match) {
+        std::cout << "MATCH!!!: " << password << std::endl;
+      } /*else {
+        std::cout << "no match: " << password << std::endl;
+      }*/
+    }
+
+    std::cout << "Loop done" <<std::endl;
+
+    auto done = std::chrono::high_resolution_clock::now();
+
+    double totalTime = std::chrono::duration_cast<std::chrono::microseconds>(done-started).count();
+    totalTime = totalTime / 1000;
+
+    std::cout << "Total time taken: " << std::fixed << totalTime << "ms" << std::endl;
+}
+
 
 int main(void)
 {
@@ -554,10 +625,6 @@ int main(void)
         testpw.size(),
         prk
     );
-
-    //char * hex_str = "";
-    //hex_str = itoa(*prk, hex_str, 16);
-    //sprintf(hex_str.c_str(),"%x", *prk);
     
     for (int i = 0; i < SHA256HashSize; i++) {
         std::cout << std::setw(2) << std::setfill('0') << std::hex << static_cast<int>(prk[i]);
@@ -577,6 +644,10 @@ int main(void)
     std::cout << std::endl;
 
     std::cout << "pbkdf2 Done" << std::endl;
+
+
+    // The cracking..
+    loadWords();
 
     return 0;
 }
