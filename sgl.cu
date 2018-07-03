@@ -490,8 +490,6 @@ void pbkdf2(std::string password, std::string salt, uint8_t digest[SHA256HashSiz
     unsigned char * pw = (unsigned char *)password.c_str();
     int pwsize = password.size();
 
-    //uint8_t dk[SHA256HashSize];
-
     unsigned char * newsalt = (unsigned char *)malloc(16);
     HexToBytes(salt, newsalt);
     newsalt[16] = (1 >> 24) & 0xff;
@@ -507,15 +505,10 @@ void pbkdf2(std::string password, std::string salt, uint8_t digest[SHA256HashSiz
         digest
     );
 
-    /*for (int a = 0; a < 32; a++) {
-        dk[a] = digest[a];
-    }*/
-
     uint8_t newdigest[32];
     uint8_t runningkey[32];
 
     memcpy(runningkey, digest, 32);
-    //memcpy(runningkey, dk, 32);
     
     for (int i = 2; i <= rounds; i++) {
         hmac(
@@ -527,15 +520,10 @@ void pbkdf2(std::string password, std::string salt, uint8_t digest[SHA256HashSiz
         );
 
         for (int j = 0; j < 32; j++) {
-            //dk[j] = dk[j] ^ newdigest[j];
             digest[j] = digest[j] ^ newdigest[j];
             runningkey[j] = newdigest[j];
         }
     }
-
-    /*for (int b = 0; b < 32; b++) {
-        digest[b] = dk[b];
-    }*/
 }
 
 
@@ -564,7 +552,7 @@ void loadWords() {
     unsigned char * expectedBytes = (unsigned char *)malloc(32);
     HexToBytes(expected, expectedBytes);
 
-    int attempts = 5;
+    int attempts = 10;
 
     auto started = std::chrono::high_resolution_clock::now();
 
