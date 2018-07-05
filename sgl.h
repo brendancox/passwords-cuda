@@ -39,46 +39,6 @@
 #ifndef _SHA_H_
 #define _SHA_H_
 
-/*
- *  Description:
- *      This file implements the Secure Hash Algorithms
- *      as defined in the U.S. National Institute of Standards
- *      and Technology Federal Information Processing Standards
- *      Publication (FIPS PUB) 180-3 published in October 2008
- *      and formerly defined in its predecessors, FIPS PUB 180-1
- *      and FIP PUB 180-2.
- *
- *      A combined document showing all algorithms is available at
- *              http://csrc.nist.gov/publications/fips/
- *                     fips180-3/fips180-3_final.pdf
- *
- *      The five hashes are defined in these sizes:
- *              SHA-1           20 byte / 160 bit
- *              SHA-224         28 byte / 224 bit
- *              SHA-256         32 byte / 256 bit
- *              SHA-384         48 byte / 384 bit
- *              SHA-512         64 byte / 512 bit
- *
-
-
-
-
-Eastlake & Hansen             Informational                    [Page 22]
- 
-RFC 6234                SHAs, HMAC-SHAs, and HKDF               May 2011
-
-
- *  Compilation Note:
- *    These files may be compiled with two options:
- *        USE_32BIT_ONLY - use 32-bit arithmetic only, for systems
- *                         without 64-bit integers
- *
- *        USE_MODIFIED_MACROS - use alternate form of the SHA_Ch()
- *                         and SHA_Maj() macros that are equivalent
- *                         and potentially faster on many systems
- *
- */
-
 #include <stdint.h>
 /*
  * If you do not have the ISO standard stdint.h header file, then you
@@ -136,65 +96,25 @@ typedef struct SHA256Context {
 } SHA256Context;
 
 /*
- *  This structure will hold context information for the SHA-224
- *  hashing operation.  It uses the SHA-256 structure for computation.
- */
-typedef struct SHA256Context SHA224Context;
-
-/*
- *  This structure will hold context information for the HMAC
- *  keyed-hashing operation.
- */
-typedef struct HMACContext {
-    int whichSha;               /* which SHA is being used */
-    int hashSize;               /* hash size of SHA being used */
-    int blockSize;              /* block size of SHA being used */
-    SHA256Context shaContext;     /* SHA context */
-    unsigned char k_opad[SHA256_Message_Block_Size];
-                        /* outer padding - key XORd with opad */
-    int Computed;               /* Is the MAC computed? */
-    int Corrupted;              /* Cumulative corruption code */
-
-} HMACContext;
-
-/*
  *  Function Prototypes
  */
 
 /* SHA-256 */
-extern int SHA256Reset(SHA256Context *);
-extern int SHA256Input(SHA256Context *, const uint8_t *bytes,
-                       unsigned int bytecount);
-extern int SHA256FinalBits(SHA256Context *, uint8_t bits,
-                           unsigned int bit_count);
-extern int SHA256Result(SHA256Context *,
-                        uint8_t Message_Digest[SHA256HashSize]);
-
+void  SHA256Reset(SHA256Context *);
+void SHA256Input(SHA256Context *, const uint8_t *bytes, unsigned int bytecount);
+extern int SHA256FinalBits(SHA256Context *, uint8_t bits, unsigned int bit_count);
+extern int SHA256Result(SHA256Context *, uint8_t Message_Digest[SHA256HashSize]);
 
 /*
  * HMAC Keyed-Hashing for Message Authentication, RFC 2104,
  * for all SHAs.
  * This interface allows a fixed-length text input to be used.
  */
-extern int hmac(
+extern void hmac(
     const unsigned char *text,     /* pointer to data stream */
     int text_len,                  /* length of data stream */
     const unsigned char *key,      /* pointer to authentication key */
     int key_len,                   /* length of authentication key */
     uint8_t digest[SHA256HashSize]); /* caller digest to fill in */
-
-/*
- * HMAC Keyed-Hashing for Message Authentication, RFC 2104,
- * for all SHAs.
- * This interface allows any length of text input to be used.
- */
-extern int hmacReset(HMACContext *context, enum SHAversion whichSha,
-                     const unsigned char *key, int key_len);
-extern int hmacInput(HMACContext *context, const unsigned char *text,
-                     int text_len);
-extern int hmacFinalBits(HMACContext *context, uint8_t bits,
-                         unsigned int bit_count);
-extern int hmacResult(HMACContext *context,
-                      uint8_t digest[SHA256HashSize]);
 
 #endif /* _SHA_H_ */

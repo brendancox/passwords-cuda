@@ -30,17 +30,6 @@
 #define SHA256_sigma1(word)   \
   (SHA256_ROTR(17,word) ^ SHA256_ROTR(19,word) ^ SHA256_SHR(10,word))
 
-/*
- * Add "length" to the length.
- * Set Corrupted when overflow has occurred.
- */
-static uint32_t addTemp;
-#define SHA224_256AddLength(context, length)               \
-  (addTemp = (context)->Length_Low, (context)->Corrupted = \
-    (((context)->Length_Low += (length)) < addTemp) &&     \
-    (++(context)->Length_High == 0) ? shaInputTooLong :    \
-                                      (context)->Corrupted )
-
 /* Local Function Prototypes */
 static void SHA224_256ProcessMessageBlock(SHA256Context *context);
 static void SHA224_256Finalize(SHA256Context *context,
@@ -73,28 +62,24 @@ static uint32_t SHA256_H0[SHA256HashSize/4] = {
  * Returns:
  *   sha Error Code.
  */
-int SHA256Input(SHA256Context *context, const uint8_t *message_array,
+void SHA256Input(SHA256Context *context, const uint8_t *message_array,
     unsigned int length)
 {
-  if (!context) return shaNull;
-  if (!length) return shaSuccess;
-  if (!message_array) return shaNull;
-  if (context->Computed) return context->Corrupted = shaStateError;
-  if (context->Corrupted) return context->Corrupted;
-
   while (length--) {
     context->Message_Block[context->Message_Block_Index++] =
             *message_array;
 
-    if ((SHA224_256AddLength(context, 8) == shaSuccess) &&
+    uint32_t addTemp = context->Length_Low;
+    if (((context->Length_Low += 8) < addTemp) && (++context->Length_High == 0)) {
+      context->Corrupted = shaInputTooLong;
+    }
+
+    if ((context->Corrupted == shaSuccess) &&
       (context->Message_Block_Index == SHA256_Message_Block_Size))
       SHA224_256ProcessMessageBlock(context);
 
     message_array++;
   }
-
-  return context->Corrupted;
-
 }
 
 
@@ -114,10 +99,8 @@ int SHA256Input(SHA256Context *context, const uint8_t *message_array,
  * Returns:
  *   sha Error Code.
  */
-static int SHA256Reset(SHA256Context *context)
+void SHA256Reset(SHA256Context *context)
 {
-  if (!context) return shaNull;
-
   context->Length_High = context->Length_Low = 0;
   context->Message_Block_Index  = 0;
 
@@ -132,8 +115,6 @@ static int SHA256Reset(SHA256Context *context)
 
   context->Computed  = 0;
   context->Corrupted = shaSuccess;
-
-  return shaSuccess;
 }
 
 /*
@@ -341,13 +322,7 @@ static int SHA256Result(SHA256Context *context,
     uint8_t Message_Digest[SHA256HashSize])
 {
   int i;
-
-  if (!context) return shaNull;
-  if (!Message_Digest) return shaNull;
-  if (context->Corrupted) return context->Corrupted;
-
-  if (!context->Computed)
-    SHA224_256Finalize(context, 0x80);
+  SHA224_256Finalize(context, 0x80);
 
   for (i = 0; i < SHA256HashSize; ++i)
     Message_Digest[i] = (uint8_t)
@@ -356,10 +331,12 @@ static int SHA256Result(SHA256Context *context,
   return shaSuccess;
 }
 
-int hmacReset(HMACContext *context,
-    const unsigned char *key, int key_len)
+void hmac(
+    const unsigned char *message_array, int length,
+    const unsigned char *key, int key_len,
+    uint8_t digest[SHA256HashSize])
 {
-  int i, blocksize, hashsize, ret;
+  int i;
 
   /* inner padding - key XORd with ipad */
   unsigned char k_ipad[SHA256_Message_Block_Size];
@@ -367,27 +344,18 @@ int hmacReset(HMACContext *context,
   /* temporary buffer when keylen > blocksize */
   unsigned char tempkey[SHA256HashSize];
 
-
-  if (!context) return shaNull;
-  context->Computed = 0;
-  context->Corrupted = shaSuccess;
-
-  blocksize = context->blockSize = SHA256_Message_Block_Size;
-  hashsize = context->hashSize = SHA256HashSize;
-
   /*
    * If key is longer than the hash blocksize,
    * reset it to key = HASH(key).
    */
-  if (key_len > blocksize) {
+  if (key_len > SHA256_Message_Block_Size) {
     SHA256Context tcontext;
-    int err = SHA256Reset(&tcontext) ||
-              SHA256Input(&tcontext, key, key_len) ||
-              SHA256Result(&tcontext, tempkey);
-    if (err != shaSuccess) return err;
+    SHA256Reset(&tcontext);
+    SHA256Input(&tcontext, key, key_len);
+    SHA256Result(&tcontext, tempkey);
 
     key = tempkey;
-    key_len = hashsize;
+    key_len = SHA256HashSize;
   }
 
   /*
@@ -401,74 +369,44 @@ int hmacReset(HMACContext *context,
    * and text is the data being protected.
    */
 
+   unsigned char k_opad[SHA256_Message_Block_Size];
+
   /* store key into the pads, XOR'd with ipad and opad values */
   for (i = 0; i < key_len; i++) {
     k_ipad[i] = key[i] ^ 0x36;
-    context->k_opad[i] = key[i] ^ 0x5c;
+    k_opad[i] = key[i] ^ 0x5c;
   }
   /* remaining pad bytes are '\0' XOR'd with ipad and opad values */
-  for ( ; i < blocksize; i++) {
+  for ( ; i < SHA256_Message_Block_Size; i++) {
     k_ipad[i] = 0x36;
-    context->k_opad[i] = 0x5c;
+    k_opad[i] = 0x5c;
   }
+
+  SHA256Context shaContext; 
 
   /* perform inner hash */
   /* init context for 1st pass */
-  ret = SHA256Reset(&context->shaContext) ||
-        /* and start with inner pad */
-        SHA256Input(&context->shaContext, k_ipad, blocksize);
-  return context->Corrupted = ret;
-}
+  SHA256Reset(&shaContext);
+  /* and start with inner pad */
+  SHA256Input(&shaContext, k_ipad, SHA256_Message_Block_Size);
 
-int hmacInput(HMACContext *context, const unsigned char *text,
-    int text_len)
-{
-  if (!context) return shaNull;
-  if (context->Corrupted) return context->Corrupted;
-  if (context->Computed) return context->Corrupted = shaStateError;
-  /* then text of datagram */
-  return context->Corrupted =
-    SHA256Input(&context->shaContext, text, text_len);
-}
-
-int hmacResult(HMACContext *context, uint8_t *digest)
-{
-  int ret;
-  if (!context) return shaNull;
-  if (context->Corrupted) return context->Corrupted;
-  if (context->Computed) return context->Corrupted = shaStateError;
-
-  /* finish up 1st pass */
-  /* (Use digest here as a temporary buffer.) */
-  ret =
-    SHA256Result(&context->shaContext, digest) ||
-
-         /* perform outer SHA */
-         /* init context for 2nd pass */
-         SHA256Reset(&context->shaContext) ||
-
-         /* start with outer pad */
-         SHA256Input(&context->shaContext, context->k_opad,
-                   context->blockSize) ||
-
-         /* then results of 1st hash */
-         SHA256Input(&context->shaContext, digest, context->hashSize) ||
-         /* finish up 2nd pass */
-         SHA256Result(&context->shaContext, digest);
-
-  context->Computed = 1;
-  return context->Corrupted = ret;
-}
-
-int hmac(
-    const unsigned char *message_array, int length,
-    const unsigned char *key, int key_len,
-    uint8_t digest[SHA256HashSize])
-{
-  HMACContext context;
-  return hmacReset(&context, key, key_len) ||
-         hmacInput(&context, message_array, length) ||
-         hmacResult(&context, digest);
+  // Run on the message array.
+  SHA256Input(
+    &shaContext,
+    message_array,
+    length);
+  
+  //hmacResult(&context, digest);
+  SHA256Result(&shaContext, digest);
+  /* perform outer SHA */
+  /* init context for 2nd pass */
+  SHA256Reset(&shaContext);
+  /* start with outer pad */
+  SHA256Input(&shaContext, k_opad, SHA256_Message_Block_Size);
+  /* then results of 1st hash */
+  SHA256Input(&shaContext, digest, SHA256HashSize);
+  /* finish up 2nd pass */
+  SHA256Result(&shaContext, digest);
 }
 
 void HexToBytes(const std::string& hex, unsigned char * &newsalt) {
@@ -555,7 +493,7 @@ void runIterationKernel(std::string password[10], std::string salt, unsigned cha
 
   uint8_t result[SHA256HashSize];
 
-  pbkdf2(password, salt, result);
+  //pbkdf2(password, salt, result);
   
   bool match = true;
   for (int j = 0; j < SHA256HashSize; j++) {
@@ -641,17 +579,19 @@ void loadWords() {
 
     int attempts = 10;
 
-    auto started = std::chrono::high_resolution_clock::now();
+
 
     std::cout << "About to start loop" <<std::endl;
+
+    auto started = std::chrono::high_resolution_clock::now();
 
     for (int i = 0; i < attempts; i++) {
       runIteration(words, salt, expectedBytes);
     }
 
-    std::cout << "Loop done" <<std::endl;
-
     auto done = std::chrono::high_resolution_clock::now();
+
+    std::cout << "Loop done" <<std::endl;
 
     double totalTime = std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count();
     totalTime = totalTime / 1000;
