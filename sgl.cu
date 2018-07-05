@@ -526,6 +526,93 @@ void pbkdf2(std::string password, std::string salt, uint8_t digest[SHA256HashSiz
     }
 }
 
+void runIteration(std::string words[18328], std::string salt, unsigned char * expected) {
+  int rand1 = rand() % 18327;
+  int rand2 = rand() % 18327;
+  int rand3 = rand() % 18327;
+  std::string password = words[rand1] + " " + words[rand2] + " " + words[rand3];
+
+  uint8_t result[SHA256HashSize];
+
+  pbkdf2(password, salt, result);
+  
+  bool match = true;
+  for (int j = 0; j < SHA256HashSize; j++) {
+    if (result[j] != expected[j]) {
+      match = false;
+      break;
+    }
+  }
+
+  if (match) {
+    std::cout << "MATCH!!!: " << password << std::endl;
+  }
+}
+
+
+__global__
+void runIterationKernel(std::string password[10], std::string salt, unsigned char * expected) {
+
+  uint8_t result[SHA256HashSize];
+
+  pbkdf2(password, salt, result);
+  
+  bool match = true;
+  for (int j = 0; j < SHA256HashSize; j++) {
+    if (result[j] != expected[j]) {
+      match = false;
+      break;
+    }
+  }
+
+  if (match) {
+    //std::cout << "MATCH!!!: " << password << std::endl;
+  }
+}
+
+void runInParallel() {
+  std::string words[18328];
+
+  std::string line;
+  std::ifstream myfile;
+  myfile.open ("AgileWords.txt");
+  if (myfile.is_open())
+  {
+      int i = 0;
+    while ( getline (myfile,line) )
+    {
+      words[i] = line;
+      i++;
+    }
+    myfile.close();
+  }
+
+  // ID: DOHB6DC7
+  std::string salt = "9dc661ec09c948dd16710439d157cef2";
+  std::string expected = "4073c5e1cbd7790347b26e0447795220cd933689219b3446da294f509a583d48";
+  unsigned char * expectedBytes = (unsigned char *)malloc(32);
+  HexToBytes(expected, expectedBytes);
+
+  int attempts = 10;
+
+  auto started = std::chrono::high_resolution_clock::now();
+
+  std::string passwords[10];
+  for (int i = 0; i < attempts; i++) {
+    int rand1 = rand() % 18327;
+    int rand2 = rand() % 18327;
+    int rand3 = rand() % 18327;
+    passwords[i] = words[rand1] + " " + words[rand2] + " " + words[rand3];
+  }
+
+  runIterationKernel<<<1, 1>>>(passwords, salt, expectedBytes);
+
+  auto done = std::chrono::high_resolution_clock::now();
+  double totalTime = std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count();
+  totalTime = totalTime / 1000;
+  std::cout << "Total time taken: " << std::fixed << totalTime << "s" << std::endl;
+}
+
 
 void loadWords() {
     std::string words[18328];
@@ -559,29 +646,7 @@ void loadWords() {
     std::cout << "About to start loop" <<std::endl;
 
     for (int i = 0; i < attempts; i++) {
-
-      // Should seed before loop
-      int rand1 = rand() % 18327;
-      int rand2 = rand() % 18327;
-      int rand3 = rand() % 18327;
-      std::string password = words[rand1] + " " + words[rand2] + " " + words[rand3];
-      uint8_t result[SHA256HashSize];
-
-      pbkdf2(password, salt, result);
-      
-      bool match = true;
-      for (int j = 0; j < SHA256HashSize; j++) {
-        if (result[j] != expectedBytes[j]) {
-          match = false;
-          break;
-        }
-      }
-
-      if (match) {
-        std::cout << "MATCH!!!: " << password << std::endl;
-      } /*else {
-        std::cout << "no match: " << password << std::endl;
-      }*/
+      runIteration(words, salt, expectedBytes);
     }
 
     std::cout << "Loop done" <<std::endl;
