@@ -31,17 +31,15 @@
   (SHA256_ROTR(17,word) ^ SHA256_ROTR(19,word) ^ SHA256_SHR(10,word))
 
 /* Local Function Prototypes */
-static void SHA224_256ProcessMessageBlock(SHA256Context *context);
-static void SHA224_256Finalize(SHA256Context *context,
+__host__ __device__ void SHA224_256ProcessMessageBlock(SHA256Context *context);
+__host__ __device__  void SHA224_256Finalize(SHA256Context *context,
   uint8_t Pad_Byte);
-static void SHA224_256PadMessage(SHA256Context *context,
+__host__ __device__  void SHA224_256PadMessage(SHA256Context *context,
   uint8_t Pad_Byte);
 
-/* Initial Hash Values: FIPS 180-3 section 5.3.3 */
-static uint32_t SHA256_H0[SHA256HashSize/4] = {
-  0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
-  0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19
-};
+
+// How many to run in parallel.
+const int IN_PARALLEL = 20;
 
 /*
  * SHA256Input
@@ -62,7 +60,7 @@ static uint32_t SHA256_H0[SHA256HashSize/4] = {
  * Returns:
  *   sha Error Code.
  */
-void SHA256Input(SHA256Context *context, const uint8_t *message_array,
+ __host__ __device__ void SHA256Input(SHA256Context *context, const uint8_t *message_array,
     unsigned int length)
 {
   while (length--) {
@@ -99,19 +97,19 @@ void SHA256Input(SHA256Context *context, const uint8_t *message_array,
  * Returns:
  *   sha Error Code.
  */
-void SHA256Reset(SHA256Context *context)
+ __host__ __device__ void SHA256Reset(SHA256Context *context)
 {
   context->Length_High = context->Length_Low = 0;
   context->Message_Block_Index  = 0;
 
-  context->Intermediate_Hash[0] = SHA256_H0[0];
-  context->Intermediate_Hash[1] = SHA256_H0[1];
-  context->Intermediate_Hash[2] = SHA256_H0[2];
-  context->Intermediate_Hash[3] = SHA256_H0[3];
-  context->Intermediate_Hash[4] = SHA256_H0[4];
-  context->Intermediate_Hash[5] = SHA256_H0[5];
-  context->Intermediate_Hash[6] = SHA256_H0[6];
-  context->Intermediate_Hash[7] = SHA256_H0[7];
+  context->Intermediate_Hash[0] = 0x6A09E667;
+  context->Intermediate_Hash[1] = 0xBB67AE85;
+  context->Intermediate_Hash[2] = 0x3C6EF372;
+  context->Intermediate_Hash[3] = 0xA54FF53A;
+  context->Intermediate_Hash[4] = 0x510E527F;
+  context->Intermediate_Hash[5] = 0x9B05688C;
+  context->Intermediate_Hash[6] = 0x1F83D9AB;
+  context->Intermediate_Hash[7] = 0x5BE0CD19;
 
   context->Computed  = 0;
   context->Corrupted = shaSuccess;
@@ -136,7 +134,7 @@ void SHA256Reset(SHA256Context *context)
  *   single character names, were used because those were the
  *   names used in the Secure Hash Standard.
  */
-static void SHA224_256ProcessMessageBlock(SHA256Context *context)
+ __host__ __device__ void SHA224_256ProcessMessageBlock(SHA256Context *context)
 {
   /* Constants defined in FIPS 180-3, section 4.2.2 */
   static const uint32_t K[64] = {
@@ -224,7 +222,7 @@ static void SHA224_256ProcessMessageBlock(SHA256Context *context)
  * Returns:
  *   sha Error Code.
  */
-static void SHA224_256Finalize(SHA256Context *context,
+ __host__ __device__ void SHA224_256Finalize(SHA256Context *context,
     uint8_t Pad_Byte)
 {
   int i;
@@ -261,7 +259,7 @@ static void SHA224_256Finalize(SHA256Context *context,
  * Returns:
  *   Nothing.
  */
-static void SHA224_256PadMessage(SHA256Context *context,
+ __host__ __device__ void SHA224_256PadMessage(SHA256Context *context,
     uint8_t Pad_Byte)
 {
 
@@ -318,7 +316,7 @@ static void SHA224_256PadMessage(SHA256Context *context,
  * Returns:
  *   sha Error Code.
  */
-static int SHA256Result(SHA256Context *context,
+ __host__ __device__ void SHA256Result(SHA256Context *context,
     uint8_t Message_Digest[SHA256HashSize])
 {
   int i;
@@ -327,11 +325,9 @@ static int SHA256Result(SHA256Context *context,
   for (i = 0; i < SHA256HashSize; ++i)
     Message_Digest[i] = (uint8_t)
       (context->Intermediate_Hash[i>>2] >> 8 * ( 3 - ( i & 0x03 ) ));
-
-  return shaSuccess;
 }
 
-void hmac(
+__host__ __device__ void hmac(
     const unsigned char *message_array, int length,
     const unsigned char *key, int key_len,
     uint8_t digest[SHA256HashSize])
@@ -419,26 +415,17 @@ void HexToBytes(const std::string& hex, unsigned char * &newsalt) {
 
 // Compile with: nvcc sgl.cu -o build/sgl
 
-void pbkdf2(std::string password, std::string salt, uint8_t digest[SHA256HashSize]) {
+__host__ __device__ void pbkdf2(unsigned char * password, int pwsize, unsigned char * salt, uint8_t digest[SHA256HashSize]) {
 
     // Hashing function will be sha256. hlen will therefore be 32, same as keyLen.
     // Desired key length will be 32.
     // iterations will be 100000.
     int rounds = 100000;
-    unsigned char * pw = (unsigned char *)password.c_str();
-    int pwsize = password.size();
-
-    unsigned char * newsalt = (unsigned char *)malloc(16);
-    HexToBytes(salt, newsalt);
-    newsalt[16] = (1 >> 24) & 0xff;
-    newsalt[17] = (1 >> 16) & 0xff;
-    newsalt[18] = (1 >> 8) & 0xff;
-    newsalt[19] = (1 >> 0) & 0xff;
 
     hmac(
-        newsalt,
+        salt,
         20,
-        pw,
+        password,
         pwsize,
         digest
     );
@@ -452,7 +439,7 @@ void pbkdf2(std::string password, std::string salt, uint8_t digest[SHA256HashSiz
         hmac(
             runningkey,
             32,
-            pw,
+            password,
             pwsize,
             newdigest
         );
@@ -464,7 +451,18 @@ void pbkdf2(std::string password, std::string salt, uint8_t digest[SHA256HashSiz
     }
 }
 
-void runIteration(std::string words[18328], std::string salt, unsigned char * expected) {
+unsigned char * createPbkdfSalt(std::string salt) {
+  unsigned char * newsalt = (unsigned char *)malloc(16);
+  HexToBytes(salt, newsalt);
+  newsalt[16] = (1 >> 24) & 0xff;
+  newsalt[17] = (1 >> 16) & 0xff;
+  newsalt[18] = (1 >> 8) & 0xff;
+  newsalt[19] = (1 >> 0) & 0xff;
+
+  return newsalt;
+}
+
+void runIteration(std::string words[18328], unsigned char * salt, unsigned char * expected) {
   int rand1 = rand() % 18327;
   int rand2 = rand() % 18327;
   int rand3 = rand() % 18327;
@@ -472,7 +470,7 @@ void runIteration(std::string words[18328], std::string salt, unsigned char * ex
 
   uint8_t result[SHA256HashSize];
 
-  pbkdf2(password, salt, result);
+  pbkdf2((unsigned char *)password.c_str(), password.size(), salt, result);
   
   bool match = true;
   for (int j = 0; j < SHA256HashSize; j++) {
@@ -489,11 +487,13 @@ void runIteration(std::string words[18328], std::string salt, unsigned char * ex
 
 
 __global__
-void runIterationKernel(std::string password[10], std::string salt, unsigned char * expected) {
+void runIterationKernel(unsigned char* password[IN_PARALLEL], int pwsizes[IN_PARALLEL], unsigned char * salt, unsigned char * expected, bool matches[IN_PARALLEL]) {
 
   uint8_t result[SHA256HashSize];
 
-  //pbkdf2(password, salt, result);
+  int i = blockIdx.x + threadIdx.x;;
+
+  pbkdf2(password[i], pwsizes[i], salt, result);
   
   bool match = true;
   for (int j = 0; j < SHA256HashSize; j++) {
@@ -504,11 +504,14 @@ void runIterationKernel(std::string password[10], std::string salt, unsigned cha
   }
 
   if (match) {
-    //std::cout << "MATCH!!!: " << password << std::endl;
+    matches[i] = true;
   }
 }
 
 void runInParallel() {
+
+  std::cout << "Setting up parallel run" << std::endl;
+
   std::string words[18328];
 
   std::string line;
@@ -526,31 +529,49 @@ void runInParallel() {
   }
 
   // ID: DOHB6DC7
-  std::string salt = "9dc661ec09c948dd16710439d157cef2";
+  std::string saltstring = "9dc661ec09c948dd16710439d157cef2";
+  unsigned char * salt = createPbkdfSalt(saltstring);
   std::string expected = "4073c5e1cbd7790347b26e0447795220cd933689219b3446da294f509a583d48";
   unsigned char * expectedBytes = (unsigned char *)malloc(32);
   HexToBytes(expected, expectedBytes);
 
-  int attempts = 10;
-
   auto started = std::chrono::high_resolution_clock::now();
 
-  std::string passwords[10];
-  for (int i = 0; i < attempts; i++) {
+  std::string originals[IN_PARALLEL];
+  unsigned char * passwords[IN_PARALLEL];
+  int pwsizes[IN_PARALLEL];
+  bool matches[IN_PARALLEL];
+  for (int i = 0; i < IN_PARALLEL; i++) {
     int rand1 = rand() % 18327;
     int rand2 = rand() % 18327;
     int rand3 = rand() % 18327;
-    passwords[i] = words[rand1] + " " + words[rand2] + " " + words[rand3];
+    originals[i] = words[rand1] + " " + words[rand2] + " " + words[rand3];
+    pwsizes[i] = originals[i].size();
+    passwords[i] = (unsigned char *)originals[i].c_str();
+    matches[i] = false;
   }
 
-  runIterationKernel<<<1, 1>>>(passwords, salt, expectedBytes);
+  for (int i = 0; i < IN_PARALLEL; i++) {
+    std::cout << "Created password: " << reinterpret_cast<char*>(passwords[i]) << std::endl;
+  }
+
+  runIterationKernel<<<1, 1>>>(passwords, pwsizes, salt, expectedBytes, matches);
+
+  cudaDeviceSynchronize();
+
+  for (int k = 0; k < IN_PARALLEL; k++) {
+    if (matches[k]) {
+      std::cout << "MATCH!!!: " << originals[k] << std::endl;
+    } else {
+      std::cout << "Did not match: " << originals[k] << std::endl;
+    }
+  }
 
   auto done = std::chrono::high_resolution_clock::now();
   double totalTime = std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count();
   totalTime = totalTime / 1000;
   std::cout << "Total time taken: " << std::fixed << totalTime << "s" << std::endl;
 }
-
 
 void loadWords() {
     std::string words[18328];
@@ -572,14 +593,13 @@ void loadWords() {
     std::cout << "Words loaded" <<std::endl;
 
     // ID: DOHB6DC7
-    std::string salt = "9dc661ec09c948dd16710439d157cef2";
+    std::string saltstring = "9dc661ec09c948dd16710439d157cef2";
+    unsigned char * salt = createPbkdfSalt(saltstring);
     std::string expected = "4073c5e1cbd7790347b26e0447795220cd933689219b3446da294f509a583d48";
     unsigned char * expectedBytes = (unsigned char *)malloc(32);
     HexToBytes(expected, expectedBytes);
 
     int attempts = 10;
-
-
 
     std::cout << "About to start loop" <<std::endl;
 
@@ -608,8 +628,7 @@ int main(void)
     std::string testsalt = "2db485972861e63479528bf382d1bc04";
     std::string testhash = "3c453512d47b37352bf2c5c1408ea4d9f46c48878782843a685c0c7e54232ba0";
 
-    unsigned char * newsalt = (unsigned char *)malloc(16);
-    HexToBytes(testsalt, newsalt);
+    unsigned char * newsalt = createPbkdfSalt(testsalt);
 
     uint8_t prk[SHA256HashSize];
 
@@ -630,7 +649,7 @@ int main(void)
 
     uint8_t pdprk[SHA256HashSize];
 
-    pbkdf2(testpw, testsalt, pdprk);
+    pbkdf2((unsigned char *)testpw.c_str(), testpw.size(), newsalt, pdprk);
 
     for (int i = 0; i < SHA256HashSize; i++) {
         //printf("%x", prk[i]);
@@ -657,6 +676,8 @@ int main(void)
 
     // The cracking..
     loadWords();
+
+    runInParallel();
 
     return 0;
 }

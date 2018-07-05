@@ -100,17 +100,16 @@ typedef struct SHA256Context {
  */
 
 /* SHA-256 */
-void  SHA256Reset(SHA256Context *);
-void SHA256Input(SHA256Context *, const uint8_t *bytes, unsigned int bytecount);
-extern int SHA256FinalBits(SHA256Context *, uint8_t bits, unsigned int bit_count);
-extern int SHA256Result(SHA256Context *, uint8_t Message_Digest[SHA256HashSize]);
+__host__ __device__ void  SHA256Reset(SHA256Context *);
+__host__ __device__ void SHA256Input(SHA256Context *, const uint8_t *bytes, unsigned int bytecount);
+__host__ __device__ void SHA256Result(SHA256Context *, uint8_t Message_Digest[SHA256HashSize]);
 
 /*
  * HMAC Keyed-Hashing for Message Authentication, RFC 2104,
  * for all SHAs.
  * This interface allows a fixed-length text input to be used.
  */
-extern void hmac(
+__host__ __device__ void hmac(
     const unsigned char *text,     /* pointer to data stream */
     int text_len,                  /* length of data stream */
     const unsigned char *key,      /* pointer to authentication key */
