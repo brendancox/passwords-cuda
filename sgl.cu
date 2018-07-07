@@ -39,7 +39,7 @@ __host__ __device__  void SHA224_256PadMessage(SHA256Context *context,
 
 
 // How many to run in parallel.
-const int IN_PARALLEL = 20;
+const int IN_PARALLEL = 32;
 
 /*
  * SHA256Input
@@ -337,23 +337,6 @@ __host__ __device__ void hmac(
   /* inner padding - key XORd with ipad */
   unsigned char k_ipad[SHA256_Message_Block_Size];
 
-  /* temporary buffer when keylen > blocksize */
-  unsigned char tempkey[SHA256HashSize];
-
-  /*
-   * If key is longer than the hash blocksize,
-   * reset it to key = HASH(key).
-   */
-  if (key_len > SHA256_Message_Block_Size) {
-    SHA256Context tcontext;
-    SHA256Reset(&tcontext);
-    SHA256Input(&tcontext, key, key_len);
-    SHA256Result(&tcontext, tempkey);
-
-    key = tempkey;
-    key_len = SHA256HashSize;
-  }
-
   /*
    * The HMAC transform looks like:
    *
@@ -434,7 +417,10 @@ __host__ __device__ void pbkdf2(unsigned char * password, int pwsize, unsigned c
     uint8_t runningkey[32];
 
     memcpy(runningkey, digest, 32);
-    
+    /*for (int i = 0; i < 32; i++) {
+      runningkey[j] = newdigest[j];
+    }*/
+
     for (int i = 2; i <= rounds; i++) {
         hmac(
             runningkey,
@@ -487,24 +473,26 @@ void runIteration(std::string words[18328], unsigned char * salt, unsigned char 
 
 
 __global__
-void runIterationKernel(unsigned char* password[IN_PARALLEL], int pwsizes[IN_PARALLEL], unsigned char * salt, unsigned char * expected, bool matches[IN_PARALLEL]) {
+void runIterationKernel(unsigned char* passwords, int * pwsizes, unsigned char * salt, unsigned char * expected, bool matches[IN_PARALLEL]) {
 
   uint8_t result[SHA256HashSize];
 
-  int i = blockIdx.x + threadIdx.x;;
+  for (int i = 0; i < IN_PARALLEL; i++) {
+    unsigned char * password;
+    password = passwords + i * 40;
+    pbkdf2(password, pwsizes[i], salt, result);
+    
+    bool match = true;
+    /*for (int j = 0; j < SHA256HashSize; j++) {
+      if (result[j] != expected[j]) {
+        match = false;
+        break;
+      }
+    }*/
 
-  pbkdf2(password[i], pwsizes[i], salt, result);
-  
-  bool match = true;
-  for (int j = 0; j < SHA256HashSize; j++) {
-    if (result[j] != expected[j]) {
-      match = false;
-      break;
+    if (match) {
+      matches[i] = true;
     }
-  }
-
-  if (match) {
-    matches[i] = true;
   }
 }
 
@@ -528,36 +516,68 @@ void runInParallel() {
     myfile.close();
   }
 
-  // ID: DOHB6DC7
-  std::string saltstring = "9dc661ec09c948dd16710439d157cef2";
+  // ID: DOHB6DC7 -- overwritten for testing !!!!!
+  //std::string saltstring = "9dc661ec09c948dd16710439d157cef2";
+  std::string saltstring = "2db485972861e63479528bf382d1bc04";
+
   unsigned char * salt = createPbkdfSalt(saltstring);
-  std::string expected = "4073c5e1cbd7790347b26e0447795220cd933689219b3446da294f509a583d48";
+  std::string expected = "3c453512d47b37352bf2c5c1408ea4d9f46c48878782843a685c0c7e54232ba0";
+  //std::string expected = "4073c5e1cbd7790347b26e0447795220cd933689219b3446da294f509a583d48";
   unsigned char * expectedBytes = (unsigned char *)malloc(32);
   HexToBytes(expected, expectedBytes);
 
   auto started = std::chrono::high_resolution_clock::now();
 
   std::string originals[IN_PARALLEL];
-  unsigned char * passwords[IN_PARALLEL];
-  int pwsizes[IN_PARALLEL];
-  bool matches[IN_PARALLEL];
+  unsigned char * passwords;
+  int *pwsizes;
+  bool *matches;
+  cudaMallocManaged(&passwords, IN_PARALLEL * 40 * IN_PARALLEL * sizeof(char));
+  cudaMallocManaged(&pwsizes, IN_PARALLEL * sizeof(int));
+  cudaMallocManaged(&matches, IN_PARALLEL * sizeof(bool));
+  cudaMallocManaged(&salt, 20);
+  cudaMallocManaged(&expectedBytes, 32);
+
   for (int i = 0; i < IN_PARALLEL; i++) {
-    int rand1 = rand() % 18327;
-    int rand2 = rand() % 18327;
-    int rand3 = rand() % 18327;
-    originals[i] = words[rand1] + " " + words[rand2] + " " + words[rand3];
+
+    if (i == 16) {
+      originals[i] = "glassy ubiquity absence";
+
+    } else {
+      int rand1 = rand() % 18327;
+      int rand2 = rand() % 18327;
+      int rand3 = rand() % 18327;
+      originals[i] = words[rand1] + " " + words[rand2] + " " + words[rand3];
+      
+    }
+
     pwsizes[i] = originals[i].size();
-    passwords[i] = (unsigned char *)originals[i].c_str();
+    unsigned char * password = (unsigned char *)originals[i].c_str();
+    for (int j = 0; j < 40; j++) {
+      if (j < pwsizes[i]) {
+        passwords[i*40 + j] = password[j];
+      } else {
+        passwords[i*40 + j] = 0x00000000;
+      }
+      
+    }
     matches[i] = false;
   }
 
-  for (int i = 0; i < IN_PARALLEL; i++) {
-    std::cout << "Created password: " << reinterpret_cast<char*>(passwords[i]) << std::endl;
+  unsigned char * password = passwords + 16 * 40;
+
+  for (int i = 0; i < pwsizes[16]; i++) {
+    std::cout << password[i];
   }
+  std::cout << std::endl;
 
   runIterationKernel<<<1, 1>>>(passwords, pwsizes, salt, expectedBytes, matches);
 
+  std::cout << "Running parallel" << std::endl;
+
   cudaDeviceSynchronize();
+
+  std::cout << "Synchronized" << std::endl;
 
   for (int k = 0; k < IN_PARALLEL; k++) {
     if (matches[k]) {
@@ -567,10 +587,23 @@ void runInParallel() {
     }
   }
 
+  cudaFree(passwords);
+  cudaFree(pwsizes);
+  cudaFree(matches);
+  cudaFree(salt);
+  cudaFree(expectedBytes);
+
   auto done = std::chrono::high_resolution_clock::now();
   double totalTime = std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count();
   totalTime = totalTime / 1000;
   std::cout << "Total time taken: " << std::fixed << totalTime << "s" << std::endl;
+
+	// Number of combinations = 6,156,660,800,000
+	// if 5/sec is 39,000 years
+	// if 1000 takes 1min30sec then 17570
+	// if 10000 takes 5min then 5856 years
+  // And now with parallel cuda
+  // about 1500/sec? = 130 years...
 }
 
 void loadWords() {
@@ -617,6 +650,46 @@ void loadWords() {
     totalTime = totalTime / 1000;
 
     std::cout << "Total time taken: " << std::fixed << totalTime << "s" << std::endl;
+}
+
+__global__
+void increase(int n, int *x, bool *b)
+{
+  for (int i = 0; i < n; i++) {
+    if (b[i]) {
+      x[i] = x[i] + 20;
+    }
+  }
+}
+
+void testCuda() {
+  
+  int N = 5;
+  int *x;
+  bool *b;
+
+  cudaMallocManaged(&x, N*sizeof(int));
+  cudaMallocManaged(&b, N*sizeof(bool));
+
+  for (int i = 0; i < N; i++) {
+    x[i] = i;
+    if (i % 3 == 0) {
+      b[i] = false;
+    } else {
+      b[i] = true;
+    }
+  }
+
+  increase<<<1,1>>>(N, x, b);
+
+  cudaDeviceSynchronize();
+
+  for (int i = 0; i < N; i++) {
+    std::cout << std::dec << x[i] << std::endl;
+  }
+
+  cudaFree(x);
+  cudaFree(b);
 }
 
 
@@ -675,7 +748,8 @@ int main(void)
 
 
     // The cracking..
-    loadWords();
+    //loadWords();
+    //testCuda();
 
     runInParallel();
 
