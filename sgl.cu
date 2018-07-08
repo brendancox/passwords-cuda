@@ -39,7 +39,7 @@ __host__ __device__  void SHA224_256PadMessage(SHA256Context *context,
 
 
 // How many to run in parallel.
-const int IN_PARALLEL = 512;
+const int IN_PARALLEL = 256;
 
 /*
  * SHA256Input
@@ -327,9 +327,126 @@ const int IN_PARALLEL = 512;
       (context->Intermediate_Hash[i>>2] >> 8 * ( 3 - ( i & 0x03 ) ));
 }
 
-__host__ __device__ void do_something_with_var(unsigned char * var) {
-  return;
+
+__host__ __device__ void hmac_combined(
+  const unsigned char *message_array, int length,
+  const unsigned char *key, int key_len,
+  uint8_t digest[SHA256HashSize])
+{
+  int i;
+
+  unsigned char k_ipad[SHA256_Message_Block_Size];
+  unsigned char k_opad[SHA256_Message_Block_Size];
+
+  for (i = 0; i < key_len; i++) {
+    k_ipad[i] = key[i] ^ 0x36;
+    k_opad[i] = key[i] ^ 0x5c;
+  }
+  for ( ; i < SHA256_Message_Block_Size; i++) {
+    k_ipad[i] = 0x36;
+    k_opad[i] = 0x5c;
+  }
+
+  SHA256Context shaContext;
+  SHA256Context * context = &shaContext; 
+
+  // Reset
+  context->Length_High = context->Length_Low = 0;
+  context->Message_Block_Index  = 0;
+  context->Intermediate_Hash[0] = 0x6A09E667;
+  context->Intermediate_Hash[1] = 0xBB67AE85;
+  context->Intermediate_Hash[2] = 0x3C6EF372;
+  context->Intermediate_Hash[3] = 0xA54FF53A;
+  context->Intermediate_Hash[4] = 0x510E527F;
+  context->Intermediate_Hash[5] = 0x9B05688C;
+  context->Intermediate_Hash[6] = 0x1F83D9AB;
+  context->Intermediate_Hash[7] = 0x5BE0CD19;
+  context->Computed  = 0;
+  context->Corrupted = shaSuccess;
+
+  //SHA256Input(&shaContext, k_ipad, SHA256_Message_Block_Size);
+  for (i = 0; i < SHA256_Message_Block_Size; i++) {
+    context->Message_Block[context->Message_Block_Index++] = k_ipad[i];
+
+    uint32_t addTemp = context->Length_Low;
+    if (((context->Length_Low += 8) < addTemp) && (++context->Length_High == 0)) {
+      context->Corrupted = shaInputTooLong;
+    }
+
+    if ((context->Corrupted == shaSuccess) &&
+      (context->Message_Block_Index == SHA256_Message_Block_Size))
+      SHA224_256ProcessMessageBlock(context);
+  }
+
+  //SHA256Input(&shaContext, message_array, length);
+  for (i = 0; i < length; i++) {
+    context->Message_Block[context->Message_Block_Index++] = message_array[i];
+
+    uint32_t addTemp = context->Length_Low;
+    if (((context->Length_Low += 8) < addTemp) && (++context->Length_High == 0)) {
+      context->Corrupted = shaInputTooLong;
+    }
+
+    if ((context->Corrupted == shaSuccess) &&
+      (context->Message_Block_Index == SHA256_Message_Block_Size))
+      SHA224_256ProcessMessageBlock(context);
+  }
+
+  // Result
+  SHA224_256Finalize(context, 0x80);
+  for (i = 0; i < SHA256HashSize; ++i) {
+    digest[i] = (uint8_t)(context->Intermediate_Hash[i>>2] >> 8 * ( 3 - ( i & 0x03 ) ));
+  }
+
+  // Reset
+  context->Length_High = context->Length_Low = 0;
+  context->Message_Block_Index  = 0;
+  context->Intermediate_Hash[0] = 0x6A09E667;
+  context->Intermediate_Hash[1] = 0xBB67AE85;
+  context->Intermediate_Hash[2] = 0x3C6EF372;
+  context->Intermediate_Hash[3] = 0xA54FF53A;
+  context->Intermediate_Hash[4] = 0x510E527F;
+  context->Intermediate_Hash[5] = 0x9B05688C;
+  context->Intermediate_Hash[6] = 0x1F83D9AB;
+  context->Intermediate_Hash[7] = 0x5BE0CD19;
+  context->Computed  = 0;
+  context->Corrupted = shaSuccess;
+
+  //SHA256Input(&shaContext, k_opad, SHA256_Message_Block_Size);
+  for (i = 0; i < SHA256_Message_Block_Size; i++) {
+    context->Message_Block[context->Message_Block_Index++] = k_opad[i];
+
+    uint32_t addTemp = context->Length_Low;
+    if (((context->Length_Low += 8) < addTemp) && (++context->Length_High == 0)) {
+      context->Corrupted = shaInputTooLong;
+    }
+
+    if ((context->Corrupted == shaSuccess) &&
+      (context->Message_Block_Index == SHA256_Message_Block_Size))
+      SHA224_256ProcessMessageBlock(context);
+  }
+
+  //SHA256Input(&shaContext, digest, SHA256HashSize);
+  for (i = 0; i < SHA256HashSize; i++) {
+    context->Message_Block[context->Message_Block_Index++] = digest[i];
+
+    uint32_t addTemp = context->Length_Low;
+    if (((context->Length_Low += 8) < addTemp) && (++context->Length_High == 0)) {
+      context->Corrupted = shaInputTooLong;
+    }
+
+    if ((context->Corrupted == shaSuccess) &&
+      (context->Message_Block_Index == SHA256_Message_Block_Size))
+      SHA224_256ProcessMessageBlock(context);
+  }
+
+  // Result
+  SHA224_256Finalize(context, 0x80);
+  for (i = 0; i < SHA256HashSize; ++i) {
+    digest[i] = (uint8_t)(context->Intermediate_Hash[i>>2] >> 8 * ( 3 - ( i & 0x03 ) ));
+  }
 }
+
 
 __host__ __device__ void hmac(
     const unsigned char *message_array, int length,
@@ -422,13 +539,8 @@ __host__ __device__ void pbkdf2(unsigned char * password, int pwsize, unsigned c
     }*/
 
     for (int i = 2; i <= rounds; i++) {
-        hmac(
-            runningkey,
-            32,
-            password,
-            pwsize,
-            newdigest
-        );
+        //hmac(runningkey, 32, password, pwsize, newdigest);
+        hmac_combined(runningkey, 32, password, pwsize, newdigest);
 
         for (int j = 0; j < 32; j++) {
             digest[j] = digest[j] ^ newdigest[j];
@@ -528,7 +640,6 @@ void runInParallel() {
   cudaGetDeviceProperties(&properties, 0);
   std::cout << properties.name << std::endl;
   std::cout << "Threads per block: " << properties.maxThreadsPerBlock << std::endl;
-  std::cout << "max Threads dim: " << properties.maxThreadsDim << std::endl;
 
   auto started = std::chrono::high_resolution_clock::now();
 
@@ -671,13 +782,6 @@ void loadWords() {
 __global__
 void increase(int n, int *x, bool *b)
 {
-  unsigned char ipad[SHA256_Message_Block_Size];
-  for (int i =0; i < SHA256_Message_Block_Size; i++) {
-    ipad[i] = 0x36;
-  }
-
-  do_something_with_var(ipad);
-
   for (int i = 0; i < n; i++) {
     if (b[i]) {
       x[i] = x[i] + 20;
