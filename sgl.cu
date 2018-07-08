@@ -39,7 +39,7 @@ __host__ __device__  void SHA224_256PadMessage(SHA256Context *context,
 
 
 // How many to run in parallel.
-const int IN_PARALLEL = 32;
+const int IN_PARALLEL = 512;
 
 /*
  * SHA256Input
@@ -327,6 +327,10 @@ const int IN_PARALLEL = 32;
       (context->Intermediate_Hash[i>>2] >> 8 * ( 3 - ( i & 0x03 ) ));
 }
 
+__host__ __device__ void do_something_with_var(unsigned char * var) {
+  return;
+}
+
 __host__ __device__ void hmac(
     const unsigned char *message_array, int length,
     const unsigned char *key, int key_len,
@@ -370,12 +374,8 @@ __host__ __device__ void hmac(
   SHA256Input(&shaContext, k_ipad, SHA256_Message_Block_Size);
 
   // Run on the message array.
-  SHA256Input(
-    &shaContext,
-    message_array,
-    length);
+  SHA256Input(&shaContext, message_array, length);
   
-  //hmacResult(&context, digest);
   SHA256Result(&shaContext, digest);
   /* perform outer SHA */
   /* init context for 2nd pass */
@@ -418,7 +418,7 @@ __host__ __device__ void pbkdf2(unsigned char * password, int pwsize, unsigned c
 
     memcpy(runningkey, digest, 32);
     /*for (int i = 0; i < 32; i++) {
-      runningkey[j] = newdigest[j];
+      runningkey[i] = newdigest[i];
     }*/
 
     for (int i = 2; i <= rounds; i++) {
@@ -437,15 +437,12 @@ __host__ __device__ void pbkdf2(unsigned char * password, int pwsize, unsigned c
     }
 }
 
-unsigned char * createPbkdfSalt(std::string salt) {
-  unsigned char * newsalt = (unsigned char *)malloc(16);
+void createPbkdfSalt(unsigned char* newsalt, std::string salt) {
   HexToBytes(salt, newsalt);
   newsalt[16] = (1 >> 24) & 0xff;
   newsalt[17] = (1 >> 16) & 0xff;
   newsalt[18] = (1 >> 8) & 0xff;
   newsalt[19] = (1 >> 0) & 0xff;
-
-  return newsalt;
 }
 
 void runIteration(std::string words[18328], unsigned char * salt, unsigned char * expected) {
@@ -477,18 +474,21 @@ void runIterationKernel(unsigned char* passwords, int * pwsizes, unsigned char *
 
   uint8_t result[SHA256HashSize];
 
-  for (int i = 0; i < IN_PARALLEL; i++) {
+  int index = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride = blockDim.x * gridDim.x;
+
+  for (int i = index; i < IN_PARALLEL; i += stride) {
     unsigned char * password;
     password = passwords + i * 40;
     pbkdf2(password, pwsizes[i], salt, result);
     
     bool match = true;
-    /*for (int j = 0; j < SHA256HashSize; j++) {
+    for (int j = 0; j < SHA256HashSize; j++) {
       if (result[j] != expected[j]) {
         match = false;
         break;
       }
-    }*/
+    }
 
     if (match) {
       matches[i] = true;
@@ -519,12 +519,16 @@ void runInParallel() {
   // ID: DOHB6DC7 -- overwritten for testing !!!!!
   //std::string saltstring = "9dc661ec09c948dd16710439d157cef2";
   std::string saltstring = "2db485972861e63479528bf382d1bc04";
-
-  unsigned char * salt = createPbkdfSalt(saltstring);
   std::string expected = "3c453512d47b37352bf2c5c1408ea4d9f46c48878782843a685c0c7e54232ba0";
   //std::string expected = "4073c5e1cbd7790347b26e0447795220cd933689219b3446da294f509a583d48";
-  unsigned char * expectedBytes = (unsigned char *)malloc(32);
-  HexToBytes(expected, expectedBytes);
+
+
+
+  cudaDeviceProp properties;
+  cudaGetDeviceProperties(&properties, 0);
+  std::cout << properties.name << std::endl;
+  std::cout << "Threads per block: " << properties.maxThreadsPerBlock << std::endl;
+  std::cout << "max Threads dim: " << properties.maxThreadsDim << std::endl;
 
   auto started = std::chrono::high_resolution_clock::now();
 
@@ -532,11 +536,16 @@ void runInParallel() {
   unsigned char * passwords;
   int *pwsizes;
   bool *matches;
+  unsigned char * salt;
+  unsigned char * expectedBytes;
   cudaMallocManaged(&passwords, IN_PARALLEL * 40 * IN_PARALLEL * sizeof(char));
   cudaMallocManaged(&pwsizes, IN_PARALLEL * sizeof(int));
   cudaMallocManaged(&matches, IN_PARALLEL * sizeof(bool));
-  cudaMallocManaged(&salt, 20);
-  cudaMallocManaged(&expectedBytes, 32);
+  cudaMallocManaged(&salt, 20 * sizeof(char));
+  cudaMallocManaged(&expectedBytes, 32 * sizeof(char));
+
+  createPbkdfSalt(salt, saltstring);
+  HexToBytes(expected, expectedBytes);
 
   for (int i = 0; i < IN_PARALLEL; i++) {
 
@@ -571,19 +580,23 @@ void runInParallel() {
   }
   std::cout << std::endl;
 
-  runIterationKernel<<<1, 1>>>(passwords, pwsizes, salt, expectedBytes, matches);
+  cudaError_t error;
 
+  int numblocks = 4;
+  int blocksize = IN_PARALLEL / numblocks;
+
+  runIterationKernel<<<numblocks, blocksize>>>(passwords, pwsizes, salt, expectedBytes, matches);
   std::cout << "Running parallel" << std::endl;
-
   cudaDeviceSynchronize();
-
+  error = cudaGetLastError();
+  std::cout << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
   std::cout << "Synchronized" << std::endl;
 
   for (int k = 0; k < IN_PARALLEL; k++) {
     if (matches[k]) {
       std::cout << "MATCH!!!: " << originals[k] << std::endl;
     } else {
-      std::cout << "Did not match: " << originals[k] << std::endl;
+      //std::cout << "Did not match: " << originals[k] << std::endl;
     }
   }
 
@@ -627,7 +640,8 @@ void loadWords() {
 
     // ID: DOHB6DC7
     std::string saltstring = "9dc661ec09c948dd16710439d157cef2";
-    unsigned char * salt = createPbkdfSalt(saltstring);
+    unsigned char * salt = (unsigned char *)malloc(20);
+    createPbkdfSalt(salt, saltstring);
     std::string expected = "4073c5e1cbd7790347b26e0447795220cd933689219b3446da294f509a583d48";
     unsigned char * expectedBytes = (unsigned char *)malloc(32);
     HexToBytes(expected, expectedBytes);
@@ -652,9 +666,18 @@ void loadWords() {
     std::cout << "Total time taken: " << std::fixed << totalTime << "s" << std::endl;
 }
 
+
+
 __global__
 void increase(int n, int *x, bool *b)
 {
+  unsigned char ipad[SHA256_Message_Block_Size];
+  for (int i =0; i < SHA256_Message_Block_Size; i++) {
+    ipad[i] = 0x36;
+  }
+
+  do_something_with_var(ipad);
+
   for (int i = 0; i < n; i++) {
     if (b[i]) {
       x[i] = x[i] + 20;
@@ -701,7 +724,8 @@ int main(void)
     std::string testsalt = "2db485972861e63479528bf382d1bc04";
     std::string testhash = "3c453512d47b37352bf2c5c1408ea4d9f46c48878782843a685c0c7e54232ba0";
 
-    unsigned char * newsalt = createPbkdfSalt(testsalt);
+    unsigned char * newsalt = (unsigned char *)malloc(20);
+    createPbkdfSalt(newsalt, testsalt);
 
     uint8_t prk[SHA256HashSize];
 
@@ -749,7 +773,7 @@ int main(void)
 
     // The cracking..
     //loadWords();
-    //testCuda();
+    testCuda();
 
     runInParallel();
 
